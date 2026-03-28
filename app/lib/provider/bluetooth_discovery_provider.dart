@@ -19,9 +19,9 @@ class StartBluetoothDiscoveryAction extends AsyncGlobalAction {
     }
 
     final devices = await scanBluetoothDevicesAndroid();
-    ref.notifier(bluetoothDiscoveryProvider).setState(devices);
+    ref.notifier(bluetoothDiscoveryProvider).setState((_) => devices);
 
     final signalInfo = await getBluetoothSignalInfoAndroid();
-    ref.notifier(bluetoothSignalInfoProvider).setState(signalInfo);
+    ref.notifier(bluetoothSignalInfoProvider).setState((_) => signalInfo);
   }
 }
