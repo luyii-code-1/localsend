@@ -1,4 +1,4 @@
-package org.localsend.localsend_app
+package cn.luyii.localsend_pro
 
 import android.content.ContentResolver
 import android.content.Context

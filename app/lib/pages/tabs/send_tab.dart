@@ -10,6 +10,7 @@ import 'package:localsend_app/pages/selected_files_page.dart';
 import 'package:localsend_app/pages/tabs/send_tab_vm.dart';
 import 'package:localsend_app/pages/troubleshoot_page.dart';
 import 'package:localsend_app/provider/animation_provider.dart';
+import 'package:localsend_app/provider/bluetooth_discovery_provider.dart';
 import 'package:localsend_app/provider/network/nearby_devices_provider.dart';
 import 'package:localsend_app/provider/network/scan_facade.dart';
 import 'package:localsend_app/provider/network/send_provider.dart';
@@ -232,6 +233,46 @@ class SendTab extends StatelessWidget {
                     ),
                   );
                 }),
+                if (checkPlatform([TargetPlatform.android]))
+                  Consumer(
+                    builder: (context, ref) {
+                      final bluetoothDevices = ref.watch(bluetoothDiscoveryProvider);
+                      final bluetoothSignal = ref.watch(bluetoothSignalInfoProvider);
+                      if (bluetoothDevices.isEmpty && bluetoothSignal.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(left: _horizontalPadding, right: _horizontalPadding, bottom: 10),
+                        child: Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Bluetooth 发现设备', style: Theme.of(context).textTheme.titleSmall),
+                                const SizedBox(height: 8),
+                                if (bluetoothSignal.isNotEmpty)
+                                  Text(
+                                    '本机蓝牙信号: ${bluetoothSignal['alias'] ?? 'unknown'} (${bluetoothSignal['id'] ?? 'unknown'})',
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                  ),
+                                ...bluetoothDevices.map(
+                                  (d) => ListTile(
+                                    dense: true,
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: const Icon(Icons.bluetooth),
+                                    title: Text(d.name ?? '未知设备'),
+                                    subtitle: Text(d.address),
+                                    trailing: Text(d.bondState ?? ''),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 const SizedBox(height: 10),
                 Center(
                   child: TextButton(
@@ -350,6 +391,7 @@ class _ScanButton extends StatelessWidget {
             onPressed: () async {
               context.redux(nearbyDevicesProvider).dispatch(ClearFoundDevicesAction());
               await context.global.dispatchAsync(StartSmartScan(forceLegacy: true));
+              await context.global.dispatchAsync(StartBluetoothDiscoveryAction());
             },
             child: Icon(Icons.sync, color: iconColor),
           ),
@@ -362,6 +404,7 @@ class _ScanButton extends StatelessWidget {
       onSelected: (ip) async {
         context.redux(nearbyDevicesProvider).dispatch(ClearFoundDevicesAction());
         await context.global.dispatchAsync(StartLegacySubnetScan(subnets: [ip]));
+        await context.global.dispatchAsync(StartBluetoothDiscoveryAction());
       },
       itemBuilder: (_) {
         return [
