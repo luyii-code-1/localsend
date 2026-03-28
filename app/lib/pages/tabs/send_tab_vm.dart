@@ -9,6 +9,7 @@ import 'package:localsend_app/pages/progress_page.dart';
 import 'package:localsend_app/pages/send_page.dart';
 import 'package:localsend_app/pages/web_send_page.dart';
 import 'package:localsend_app/provider/favorites_provider.dart';
+import 'package:localsend_app/provider/bluetooth_discovery_provider.dart';
 import 'package:localsend_app/provider/local_ip_provider.dart';
 import 'package:localsend_app/provider/network/nearby_devices_provider.dart';
 import 'package:localsend_app/provider/network/scan_facade.dart';
@@ -205,5 +206,6 @@ class SendTabInitAction extends AsyncGlobalAction {
     if (devices.isEmpty) {
       await dispatchAsync(StartSmartScan(forceLegacy: false));
     }
+    await dispatchAsync(StartBluetoothDiscoveryAction());
   }
 }

@@ -5,7 +5,7 @@ import 'package:logging/logging.dart';
 
 part 'android_channel.mapper.dart';
 
-const _methodChannel = MethodChannel('org.localsend.localsend_app/localsend');
+const _methodChannel = MethodChannel('cn.luyii.localsend_pro/localsend');
 final _logger = Logger('AndroidSaf');
 
 /// From Android 10 and above, we need to use the Storage Access Framework (SAF) to access files due to the scoped storage.
@@ -92,6 +92,25 @@ Future<void> openGallery() async {
   await _methodChannel.invokeMethod('openGallery');
 }
 
+Future<List<BluetoothDeviceInfo>> scanBluetoothDevicesAndroid() async {
+  final result = await _methodChannel.invokeMethod<List>('scanBluetoothDevices');
+  if (result == null) {
+    return [];
+  }
+
+  return result
+      .map((e) => BluetoothDeviceInfo.fromJson((e as Map).cast<String, dynamic>()))
+      .toList();
+}
+
+Future<Map<String, String>> getBluetoothSignalInfoAndroid() async {
+  final result = await _methodChannel.invokeMethod<Map>('getBluetoothSignalInfo');
+  if (result == null) {
+    return {};
+  }
+  return result.cast<String, String>();
+}
+
 @MappableClass()
 class PickDirectoryResult with PickDirectoryResultMappable {
   final String directoryUri;
@@ -116,4 +135,24 @@ class FileInfo with FileInfoMappable {
     required this.uri,
     required this.lastModified,
   });
+}
+
+class BluetoothDeviceInfo {
+  final String address;
+  final String? name;
+  final String? bondState;
+
+  const BluetoothDeviceInfo({
+    required this.address,
+    required this.name,
+    required this.bondState,
+  });
+
+  factory BluetoothDeviceInfo.fromJson(Map<String, dynamic> json) {
+    return BluetoothDeviceInfo(
+      address: json['address'] as String? ?? '',
+      name: json['name'] as String?,
+      bondState: json['bondState'] as String?,
+    );
+  }
 }
