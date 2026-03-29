@@ -261,7 +261,7 @@ class SendTab extends StatelessWidget {
                                     dense: true,
                                     contentPadding: EdgeInsets.zero,
                                     leading: const Icon(Icons.bluetooth),
-                                    title: Text(d.name ?? '未知设备'),
+                                    title: Text('🔵 ${d.name ?? '未知设备'}'),
                                     subtitle: Text(d.address),
                                     trailing: Text(d.bondState ?? ''),
                                   ),
