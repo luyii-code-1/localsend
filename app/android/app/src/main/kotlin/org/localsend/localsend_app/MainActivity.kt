@@ -12,8 +12,16 @@ import android.content.IntentFilter
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.Cursor
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.net.Uri
+import android.net.wifi.WifiManager
+import android.net.wifi.WifiNetworkSpecifier
 import android.provider.DocumentsContract
 import android.provider.Settings
 import androidx.core.app.ActivityCompat
@@ -25,10 +33,12 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.util.UUID
+import org.json.JSONObject
 
 
 private const val CHANNEL = "cn.luyii.localsend_pro/localsend"
 private val BLUETOOTH_FILE_TRANSFER_UUID: UUID = UUID.fromString("bd7d6f8d-98d3-44fd-a4f6-a8084fd3d6db")
+private const val HOTSPOT_CONTROL_PACKET = "__localsend_hotspot__.json"
 private const val REQUEST_CODE_PICK_DIRECTORY = 1
 private const val REQUEST_CODE_PICK_DIRECTORY_PATH = 2
 private const val REQUEST_CODE_PICK_FILE = 3
@@ -37,10 +47,14 @@ private const val REQUEST_CODE_BLUETOOTH_PERMISSIONS = 4
 class MainActivity : FlutterActivity() {
     private var pendingResult: MethodChannel.Result? = null
     private var pendingBluetoothPermissionResult: MethodChannel.Result? = null
+    private var pendingHotspotStartResult: MethodChannel.Result? = null
     private var bluetoothReceiverRegistered = false
     private var bluetoothFileServerRunning = false
     private var bluetoothServerSocket: BluetoothServerSocket? = null
     private var bluetoothServerThread: Thread? = null
+    private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
+    private var hotspotInfo: Map<String, String>? = null
+    private var activeNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private val discoveredBluetoothDevices: LinkedHashMap<String, Map<String, String?>> = linkedMapOf()
     private val bluetoothReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -135,6 +149,30 @@ class MainActivity : FlutterActivity() {
                     requestBluetoothPermissions(result)
                 }
 
+                "startLocalOnlyHotspot" -> {
+                    startLocalOnlyHotspot(result)
+                }
+
+                "stopLocalOnlyHotspot" -> {
+                    stopLocalOnlyHotspot()
+                    result.success(true)
+                }
+
+                "connectToHotspot" -> {
+                    val ssid = call.argument<String>("ssid")
+                    val passphrase = call.argument<String>("passphrase")
+                    if (ssid == null || passphrase == null) {
+                        result.success(false)
+                    } else {
+                        result.success(connectToHotspot(ssid, passphrase))
+                    }
+                }
+
+                "disconnectFromHotspot" -> {
+                    disconnectFromHotspot()
+                    result.success(true)
+                }
+
                 else -> result.notImplemented()
             }
         }
@@ -143,6 +181,8 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         unregisterBluetoothReceiver()
         stopBluetoothFileServer()
+        stopLocalOnlyHotspot()
+        disconnectFromHotspot()
         super.onDestroy()
     }
 
@@ -156,7 +196,13 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun getRequiredBluetoothPermissions(): Array<String> {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(
+                android.Manifest.permission.BLUETOOTH_SCAN,
+                android.Manifest.permission.BLUETOOTH_CONNECT,
+                android.Manifest.permission.NEARBY_WIFI_DEVICES,
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(
                 android.Manifest.permission.BLUETOOTH_SCAN,
                 android.Manifest.permission.BLUETOOTH_CONNECT,
@@ -315,9 +361,19 @@ class MainActivity : FlutterActivity() {
             val buffer = ByteArray(size)
             input.readFully(buffer)
 
-            val outputDir = getExternalFilesDir(null) ?: filesDir
-            val file = File(outputDir, fileName)
-            file.writeBytes(buffer)
+            if (fileName == HOTSPOT_CONTROL_PACKET) {
+                val payload = String(buffer, Charsets.UTF_8)
+                val json = JSONObject(payload)
+                val ssid = json.optString("ssid")
+                val passphrase = json.optString("passphrase")
+                if (ssid.isNotBlank() && passphrase.isNotBlank()) {
+                    connectToHotspot(ssid, passphrase)
+                }
+            } else {
+                val outputDir = getExternalFilesDir(null) ?: filesDir
+                val file = File(outputDir, fileName)
+                file.writeBytes(buffer)
+            }
 
             DataOutputStream(socket.outputStream).use { out ->
                 out.writeUTF("OK")
@@ -357,6 +413,86 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {
             false
         }
+    }
+
+    private fun startLocalOnlyHotspot(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            result.success(null)
+            return
+        }
+        hotspotInfo?.let {
+            result.success(it)
+            return
+        }
+
+        if (!hasPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)) {
+            result.success(null)
+            return
+        }
+
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        pendingHotspotStartResult = result
+        wifiManager.startLocalOnlyHotspot(object : WifiManager.LocalOnlyHotspotCallback() {
+            override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
+                hotspotReservation = reservation
+                val cfg = reservation.softApConfiguration
+                hotspotInfo = mapOf(
+                    "ssid" to (cfg?.ssid ?: ""),
+                    "passphrase" to (cfg?.passphrase ?: ""),
+                )
+                pendingHotspotStartResult?.success(hotspotInfo)
+                pendingHotspotStartResult = null
+            }
+
+            override fun onFailed(reason: Int) {
+                pendingHotspotStartResult?.success(null)
+                pendingHotspotStartResult = null
+            }
+        }, Handler(Looper.getMainLooper()))
+    }
+
+    private fun stopLocalOnlyHotspot() {
+        hotspotReservation?.close()
+        hotspotReservation = null
+        hotspotInfo = null
+    }
+
+    private fun connectToHotspot(ssid: String, passphrase: String): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return false
+        }
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        disconnectFromHotspot()
+
+        return try {
+            val specifier = WifiNetworkSpecifier.Builder()
+                .setSsid(ssid)
+                .setWpa2Passphrase(passphrase)
+                .build()
+            val request = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .setNetworkSpecifier(specifier)
+                .build()
+            activeNetworkCallback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    connectivityManager.bindProcessToNetwork(network)
+                }
+            }
+            connectivityManager.requestNetwork(request, activeNetworkCallback!!)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun disconnectFromHotspot() {
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        try {
+            activeNetworkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
+        } catch (_: Exception) {
+        }
+        activeNetworkCallback = null
+        connectivityManager.bindProcessToNetwork(null)
     }
 
     private fun openDirectoryPicker(onlyPath: Boolean) {

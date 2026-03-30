@@ -134,6 +134,33 @@ Future<bool> sendBluetoothFileAndroid({
       false;
 }
 
+Future<Map<String, String>?> startLocalOnlyHotspotAndroid() async {
+  final result = await _methodChannel.invokeMethod<Map>('startLocalOnlyHotspot');
+  if (result == null) {
+    return null;
+  }
+  return result.cast<String, String>();
+}
+
+Future<bool> stopLocalOnlyHotspotAndroid() async {
+  return await _methodChannel.invokeMethod<bool>('stopLocalOnlyHotspot') ?? false;
+}
+
+Future<bool> connectToHotspotAndroid({
+  required String ssid,
+  required String passphrase,
+}) async {
+  return await _methodChannel.invokeMethod<bool>('connectToHotspot', {
+        'ssid': ssid,
+        'passphrase': passphrase,
+      }) ??
+      false;
+}
+
+Future<bool> disconnectFromHotspotAndroid() async {
+  return await _methodChannel.invokeMethod<bool>('disconnectFromHotspot') ?? false;
+}
+
 @MappableClass()
 class PickDirectoryResult with PickDirectoryResultMappable {
   final String directoryUri;

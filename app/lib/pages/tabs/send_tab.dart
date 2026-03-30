@@ -277,6 +277,7 @@ class SendTab extends StatelessWidget {
                                       final success = await context.global.dispatchAsync(
                                         SendFilesToBluetoothDeviceAction(
                                           address: d.address,
+                                          targetAlias: d.name,
                                           files: vm.selectedFiles,
                                         ),
                                       );
@@ -284,8 +285,8 @@ class SendTab extends StatelessWidget {
                                         return;
                                       }
                                       final msg = success
-                                          ? '蓝牙直传完成'
-                                          : '蓝牙直传失败，或文件过大。大文件热点方案将在下一步接入。';
+                                          ? '蓝牙流程执行成功（小文件直传或已下发热点信息）'
+                                          : '蓝牙流程失败，请检查蓝牙/位置/Wi‑Fi权限';
                                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
                                     },
                                   ),
