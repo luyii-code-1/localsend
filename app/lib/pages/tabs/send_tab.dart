@@ -11,6 +11,7 @@ import 'package:localsend_app/pages/tabs/send_tab_vm.dart';
 import 'package:localsend_app/pages/troubleshoot_page.dart';
 import 'package:localsend_app/provider/animation_provider.dart';
 import 'package:localsend_app/provider/bluetooth_discovery_provider.dart';
+import 'package:localsend_app/provider/bluetooth_transfer_provider.dart';
 import 'package:localsend_app/provider/network/nearby_devices_provider.dart';
 import 'package:localsend_app/provider/network/scan_facade.dart';
 import 'package:localsend_app/provider/network/send_provider.dart';
@@ -25,6 +26,7 @@ import 'package:localsend_app/widget/big_button.dart';
 import 'package:localsend_app/widget/custom_icon_button.dart';
 import 'package:localsend_app/widget/dialogs/add_file_dialog.dart';
 import 'package:localsend_app/widget/dialogs/send_mode_help_dialog.dart';
+import 'package:localsend_app/widget/dialogs/no_files_dialog.dart';
 import 'package:localsend_app/widget/file_thumbnail.dart';
 import 'package:localsend_app/widget/list_tile/device_list_tile.dart';
 import 'package:localsend_app/widget/list_tile/device_placeholder_list_tile.dart';
@@ -238,9 +240,7 @@ class SendTab extends StatelessWidget {
                     builder: (context, ref) {
                       final bluetoothDevices = ref.watch(bluetoothDiscoveryProvider);
                       final bluetoothSignal = ref.watch(bluetoothSignalInfoProvider);
-                      if (bluetoothDevices.isEmpty && bluetoothSignal.isEmpty) {
-                        return const SizedBox.shrink();
-                      }
+                      final broadcastOn = ref.watch(bluetoothBroadcastOnProvider);
                       return Padding(
                         padding: const EdgeInsets.only(left: _horizontalPadding, right: _horizontalPadding, bottom: 10),
                         child: Card(
@@ -251,6 +251,11 @@ class SendTab extends StatelessWidget {
                               children: [
                                 Text('Bluetooth 发现设备', style: Theme.of(context).textTheme.titleSmall),
                                 const SizedBox(height: 8),
+                                Text(
+                                  'BE BroadCast ${broadcastOn ? 'On' : 'Off'}',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                                const SizedBox(height: 4),
                                 if (bluetoothSignal.isNotEmpty)
                                   Text(
                                     '本机蓝牙信号: ${bluetoothSignal['alias'] ?? 'unknown'} (${bluetoothSignal['id'] ?? 'unknown'})',
@@ -264,6 +269,25 @@ class SendTab extends StatelessWidget {
                                     title: Text('🔵 ${d.name ?? '未知设备'}'),
                                     subtitle: Text(d.address),
                                     trailing: Text(d.bondState ?? ''),
+                                    onTap: () async {
+                                      if (vm.selectedFiles.isEmpty) {
+                                        await context.pushBottomSheet(() => const NoFilesDialog());
+                                        return;
+                                      }
+                                      final success = await context.global.dispatchAsync(
+                                        SendFilesToBluetoothDeviceAction(
+                                          address: d.address,
+                                          files: vm.selectedFiles,
+                                        ),
+                                      );
+                                      if (!context.mounted) {
+                                        return;
+                                      }
+                                      final msg = success
+                                          ? '蓝牙直传完成'
+                                          : '蓝牙直传失败，或文件过大。大文件热点方案将在下一步接入。';
+                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+                                    },
                                   ),
                                 ),
                               ],

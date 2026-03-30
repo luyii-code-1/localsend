@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dart_mappable/dart_mappable.dart';
 import 'package:flutter/services.dart';
 import 'package:localsend_app/util/native/content_uri_helper.dart';
@@ -109,6 +111,27 @@ Future<Map<String, String>> getBluetoothSignalInfoAndroid() async {
     return {};
   }
   return result.cast<String, String>();
+}
+
+Future<bool> startBluetoothFileServerAndroid() async {
+  return await _methodChannel.invokeMethod<bool>('startBluetoothFileServer') ?? false;
+}
+
+Future<bool> requestBluetoothPermissionsAndroid() async {
+  return await _methodChannel.invokeMethod<bool>('requestBluetoothPermissions') ?? false;
+}
+
+Future<bool> sendBluetoothFileAndroid({
+  required String address,
+  required String fileName,
+  required Uint8List data,
+}) async {
+  return await _methodChannel.invokeMethod<bool>('sendBluetoothFile', {
+        'address': address,
+        'fileName': fileName,
+        'data': data,
+      }) ??
+      false;
 }
 
 @MappableClass()
