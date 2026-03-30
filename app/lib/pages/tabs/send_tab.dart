@@ -240,9 +240,7 @@ class SendTab extends StatelessWidget {
                     builder: (context, ref) {
                       final bluetoothDevices = ref.watch(bluetoothDiscoveryProvider);
                       final bluetoothSignal = ref.watch(bluetoothSignalInfoProvider);
-                      if (bluetoothDevices.isEmpty && bluetoothSignal.isEmpty) {
-                        return const SizedBox.shrink();
-                      }
+                      final broadcastOn = ref.watch(bluetoothBroadcastOnProvider);
                       return Padding(
                         padding: const EdgeInsets.only(left: _horizontalPadding, right: _horizontalPadding, bottom: 10),
                         child: Card(
@@ -253,6 +251,11 @@ class SendTab extends StatelessWidget {
                               children: [
                                 Text('Bluetooth 发现设备', style: Theme.of(context).textTheme.titleSmall),
                                 const SizedBox(height: 8),
+                                Text(
+                                  'BE BroadCast ${broadcastOn ? 'On' : 'Off'}',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                                const SizedBox(height: 4),
                                 if (bluetoothSignal.isNotEmpty)
                                   Text(
                                     '本机蓝牙信号: ${bluetoothSignal['alias'] ?? 'unknown'} (${bluetoothSignal['id'] ?? 'unknown'})',

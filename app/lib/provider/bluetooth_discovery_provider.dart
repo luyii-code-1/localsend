@@ -11,6 +11,10 @@ final bluetoothSignalInfoProvider = StateProvider<Map<String, String>>((ref) {
   return {};
 }, debugLabel: 'bluetoothSignalInfoProvider');
 
+final bluetoothBroadcastOnProvider = StateProvider<bool>((ref) {
+  return false;
+}, debugLabel: 'bluetoothBroadcastOnProvider');
+
 class StartBluetoothDiscoveryAction extends AsyncGlobalAction {
   @override
   Future<void> reduce() async {
@@ -18,7 +22,14 @@ class StartBluetoothDiscoveryAction extends AsyncGlobalAction {
       return;
     }
 
-    await startBluetoothFileServerAndroid();
+    final permissionGranted = await requestBluetoothPermissionsAndroid();
+    if (!permissionGranted) {
+      ref.notifier(bluetoothBroadcastOnProvider).setState((_) => false);
+      return;
+    }
+
+    final broadcastOn = await startBluetoothFileServerAndroid();
+    ref.notifier(bluetoothBroadcastOnProvider).setState((_) => broadcastOn);
 
     final devices = await scanBluetoothDevicesAndroid();
     ref.notifier(bluetoothDiscoveryProvider).setState((_) => devices);

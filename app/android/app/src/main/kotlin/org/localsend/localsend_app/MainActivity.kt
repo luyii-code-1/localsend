@@ -32,9 +32,11 @@ private val BLUETOOTH_FILE_TRANSFER_UUID: UUID = UUID.fromString("bd7d6f8d-98d3-
 private const val REQUEST_CODE_PICK_DIRECTORY = 1
 private const val REQUEST_CODE_PICK_DIRECTORY_PATH = 2
 private const val REQUEST_CODE_PICK_FILE = 3
+private const val REQUEST_CODE_BLUETOOTH_PERMISSIONS = 4
 
 class MainActivity : FlutterActivity() {
     private var pendingResult: MethodChannel.Result? = null
+    private var pendingBluetoothPermissionResult: MethodChannel.Result? = null
     private var bluetoothReceiverRegistered = false
     private var bluetoothFileServerRunning = false
     private var bluetoothServerSocket: BluetoothServerSocket? = null
@@ -129,6 +131,10 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
+                "requestBluetoothPermissions" -> {
+                    requestBluetoothPermissions(result)
+                }
+
                 else -> result.notImplemented()
             }
         }
@@ -147,6 +153,32 @@ class MainActivity : FlutterActivity() {
 
     private fun hasPermission(permission: String): Boolean {
         return ActivityCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun getRequiredBluetoothPermissions(): Array<String> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
+                android.Manifest.permission.BLUETOOTH_SCAN,
+                android.Manifest.permission.BLUETOOTH_CONNECT,
+            )
+        } else {
+            arrayOf(
+                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            )
+        }
+    }
+
+    private fun requestBluetoothPermissions(result: MethodChannel.Result) {
+        val permissions = getRequiredBluetoothPermissions()
+        val allGranted = permissions.all { hasPermission(it) }
+        if (allGranted) {
+            result.success(true)
+            return
+        }
+
+        pendingBluetoothPermissionResult = result
+        ActivityCompat.requestPermissions(this, permissions, REQUEST_CODE_BLUETOOTH_PERMISSIONS)
     }
 
     private fun canScanBluetooth(adapter: BluetoothAdapter): Boolean {
@@ -439,6 +471,21 @@ class MainActivity : FlutterActivity() {
                 pendingResult = null
             }
         }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_CODE_BLUETOOTH_PERMISSIONS) {
+            return
+        }
+
+        val granted = grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+        pendingBluetoothPermissionResult?.success(granted)
+        pendingBluetoothPermissionResult = null
     }
 
     private fun listFiles(uri: Uri, files: MutableList<FileInfo>) {

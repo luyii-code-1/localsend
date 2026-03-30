@@ -117,6 +117,10 @@ Future<bool> startBluetoothFileServerAndroid() async {
   return await _methodChannel.invokeMethod<bool>('startBluetoothFileServer') ?? false;
 }
 
+Future<bool> requestBluetoothPermissionsAndroid() async {
+  return await _methodChannel.invokeMethod<bool>('requestBluetoothPermissions') ?? false;
+}
+
 Future<bool> sendBluetoothFileAndroid({
   required String address,
   required String fileName,
