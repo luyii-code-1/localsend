@@ -10,6 +10,8 @@ import 'package:localsend_app/pages/selected_files_page.dart';
 import 'package:localsend_app/pages/tabs/send_tab_vm.dart';
 import 'package:localsend_app/pages/troubleshoot_page.dart';
 import 'package:localsend_app/provider/animation_provider.dart';
+import 'package:localsend_app/provider/bluetooth_discovery_provider.dart';
+import 'package:localsend_app/provider/bluetooth_transfer_provider.dart';
 import 'package:localsend_app/provider/network/nearby_devices_provider.dart';
 import 'package:localsend_app/provider/network/scan_facade.dart';
 import 'package:localsend_app/provider/network/send_provider.dart';
@@ -24,6 +26,7 @@ import 'package:localsend_app/widget/big_button.dart';
 import 'package:localsend_app/widget/custom_icon_button.dart';
 import 'package:localsend_app/widget/dialogs/add_file_dialog.dart';
 import 'package:localsend_app/widget/dialogs/send_mode_help_dialog.dart';
+import 'package:localsend_app/widget/dialogs/no_files_dialog.dart';
 import 'package:localsend_app/widget/file_thumbnail.dart';
 import 'package:localsend_app/widget/list_tile/device_list_tile.dart';
 import 'package:localsend_app/widget/list_tile/device_placeholder_list_tile.dart';
@@ -232,6 +235,69 @@ class SendTab extends StatelessWidget {
                     ),
                   );
                 }),
+                if (checkPlatform([TargetPlatform.android]))
+                  Consumer(
+                    builder: (context, ref) {
+                      final bluetoothDevices = ref.watch(bluetoothDiscoveryProvider);
+                      final bluetoothSignal = ref.watch(bluetoothSignalInfoProvider);
+                      final broadcastOn = ref.watch(bluetoothBroadcastOnProvider);
+                      return Padding(
+                        padding: const EdgeInsets.only(left: _horizontalPadding, right: _horizontalPadding, bottom: 10),
+                        child: Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Bluetooth 发现设备', style: Theme.of(context).textTheme.titleSmall),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'BE BroadCast ${broadcastOn ? 'On' : 'Off'}',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                                const SizedBox(height: 4),
+                                if (bluetoothSignal.isNotEmpty)
+                                  Text(
+                                    '本机蓝牙信号: ${bluetoothSignal['alias'] ?? 'unknown'} (${bluetoothSignal['id'] ?? 'unknown'})',
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                  ),
+                                ...bluetoothDevices.map(
+                                  (d) => ListTile(
+                                    dense: true,
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: const Icon(Icons.bluetooth),
+                                    title: Text('🔵 ${d.name ?? '未知设备'}'),
+                                    subtitle: Text(d.address),
+                                    trailing: Text(d.bondState ?? ''),
+                                    onTap: () async {
+                                      if (vm.selectedFiles.isEmpty) {
+                                        await context.pushBottomSheet(() => const NoFilesDialog());
+                                        return;
+                                      }
+                                      final success = await context.global.dispatchAsync(
+                                        SendFilesToBluetoothDeviceAction(
+                                          address: d.address,
+                                          targetAlias: d.name,
+                                          files: vm.selectedFiles,
+                                        ),
+                                      );
+                                      if (!context.mounted) {
+                                        return;
+                                      }
+                                      final msg = success
+                                          ? '蓝牙流程执行成功（小文件直传或已下发热点信息）'
+                                          : '蓝牙流程失败，请检查蓝牙/位置/Wi‑Fi权限';
+                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 const SizedBox(height: 10),
                 Center(
                   child: TextButton(
@@ -350,6 +416,7 @@ class _ScanButton extends StatelessWidget {
             onPressed: () async {
               context.redux(nearbyDevicesProvider).dispatch(ClearFoundDevicesAction());
               await context.global.dispatchAsync(StartSmartScan(forceLegacy: true));
+              await context.global.dispatchAsync(StartBluetoothDiscoveryAction());
             },
             child: Icon(Icons.sync, color: iconColor),
           ),
@@ -362,6 +429,7 @@ class _ScanButton extends StatelessWidget {
       onSelected: (ip) async {
         context.redux(nearbyDevicesProvider).dispatch(ClearFoundDevicesAction());
         await context.global.dispatchAsync(StartLegacySubnetScan(subnets: [ip]));
+        await context.global.dispatchAsync(StartBluetoothDiscoveryAction());
       },
       itemBuilder: (_) {
         return [

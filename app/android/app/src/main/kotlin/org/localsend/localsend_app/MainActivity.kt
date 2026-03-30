@@ -1,26 +1,76 @@
-package org.localsend.localsend_app
+package cn.luyii.localsend_pro
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothServerSocket
+import android.bluetooth.BluetoothSocket
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.IntentFilter
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.Cursor
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.net.Uri
+import android.net.wifi.WifiManager
+import android.net.wifi.WifiNetworkSpecifier
 import android.provider.DocumentsContract
 import android.provider.Settings
+import androidx.core.app.ActivityCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.File
+import java.util.UUID
+import org.json.JSONObject
 
 
-private const val CHANNEL = "org.localsend.localsend_app/localsend"
+private const val CHANNEL = "cn.luyii.localsend_pro/localsend"
+private val BLUETOOTH_FILE_TRANSFER_UUID: UUID = UUID.fromString("bd7d6f8d-98d3-44fd-a4f6-a8084fd3d6db")
+private const val HOTSPOT_CONTROL_PACKET = "__localsend_hotspot__.json"
 private const val REQUEST_CODE_PICK_DIRECTORY = 1
 private const val REQUEST_CODE_PICK_DIRECTORY_PATH = 2
 private const val REQUEST_CODE_PICK_FILE = 3
+private const val REQUEST_CODE_BLUETOOTH_PERMISSIONS = 4
 
 class MainActivity : FlutterActivity() {
     private var pendingResult: MethodChannel.Result? = null
+    private var pendingBluetoothPermissionResult: MethodChannel.Result? = null
+    private var pendingHotspotStartResult: MethodChannel.Result? = null
+    private var bluetoothReceiverRegistered = false
+    private var bluetoothFileServerRunning = false
+    private var bluetoothServerSocket: BluetoothServerSocket? = null
+    private var bluetoothServerThread: Thread? = null
+    private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
+    private var hotspotInfo: Map<String, String>? = null
+    private var activeNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private val discoveredBluetoothDevices: LinkedHashMap<String, Map<String, String?>> = linkedMapOf()
+    private val bluetoothReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                BluetoothDevice.ACTION_FOUND -> {
+                    val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    }
+                    addBluetoothDevice(device)
+                }
+            }
+        }
+    }
 
     // Overriding the static methods we need from the Java class, as described
     // in the documentation of `FlutterActivity.NewEngineIntentBuilder`
@@ -72,14 +122,377 @@ class MainActivity : FlutterActivity() {
                     result.success(isAnimationsEnabled())
                 }
 
+                "scanBluetoothDevices" -> {
+                    result.success(scanBluetoothDevices())
+                }
+
+                "getBluetoothSignalInfo" -> {
+                    result.success(getBluetoothSignalInfo())
+                }
+
+                "startBluetoothFileServer" -> {
+                    result.success(startBluetoothFileServer())
+                }
+
+                "sendBluetoothFile" -> {
+                    val address = call.argument<String>("address")
+                    val fileName = call.argument<String>("fileName")
+                    val data = call.argument<ByteArray>("data")
+                    if (address == null || fileName == null || data == null) {
+                        result.success(false)
+                    } else {
+                        result.success(sendBluetoothFile(address, fileName, data))
+                    }
+                }
+
+                "requestBluetoothPermissions" -> {
+                    requestBluetoothPermissions(result)
+                }
+
+                "startLocalOnlyHotspot" -> {
+                    startLocalOnlyHotspot(result)
+                }
+
+                "stopLocalOnlyHotspot" -> {
+                    stopLocalOnlyHotspot()
+                    result.success(true)
+                }
+
+                "connectToHotspot" -> {
+                    val ssid = call.argument<String>("ssid")
+                    val passphrase = call.argument<String>("passphrase")
+                    if (ssid == null || passphrase == null) {
+                        result.success(false)
+                    } else {
+                        result.success(connectToHotspot(ssid, passphrase))
+                    }
+                }
+
+                "disconnectFromHotspot" -> {
+                    disconnectFromHotspot()
+                    result.success(true)
+                }
+
                 else -> result.notImplemented()
             }
         }
     }
 
+    override fun onDestroy() {
+        unregisterBluetoothReceiver()
+        stopBluetoothFileServer()
+        stopLocalOnlyHotspot()
+        disconnectFromHotspot()
+        super.onDestroy()
+    }
+
     private fun isAnimationsEnabled() : Boolean {
         return Settings.Global.getFloat(this.getContentResolver(),
             Settings.Global.ANIMATOR_DURATION_SCALE, 1.0f) != 0.0f;
+    }
+
+    private fun hasPermission(permission: String): Boolean {
+        return ActivityCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun getRequiredBluetoothPermissions(): Array<String> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(
+                android.Manifest.permission.BLUETOOTH_SCAN,
+                android.Manifest.permission.BLUETOOTH_CONNECT,
+                android.Manifest.permission.NEARBY_WIFI_DEVICES,
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
+                android.Manifest.permission.BLUETOOTH_SCAN,
+                android.Manifest.permission.BLUETOOTH_CONNECT,
+            )
+        } else {
+            arrayOf(
+                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            )
+        }
+    }
+
+    private fun requestBluetoothPermissions(result: MethodChannel.Result) {
+        val permissions = getRequiredBluetoothPermissions()
+        val allGranted = permissions.all { hasPermission(it) }
+        if (allGranted) {
+            result.success(true)
+            return
+        }
+
+        pendingBluetoothPermissionResult = result
+        ActivityCompat.requestPermissions(this, permissions, REQUEST_CODE_BLUETOOTH_PERMISSIONS)
+    }
+
+    private fun canScanBluetooth(adapter: BluetoothAdapter): Boolean {
+        if (!adapter.isEnabled) {
+            return false
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return hasPermission(android.Manifest.permission.BLUETOOTH_SCAN)
+        }
+        return hasPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) || hasPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+    }
+
+    private fun canReadBluetoothNames(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return hasPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+        }
+        return true
+    }
+
+    private fun addBluetoothDevice(device: BluetoothDevice?) {
+        if (device == null) {
+            return
+        }
+        val address = device.address ?: return
+        val canReadName = canReadBluetoothNames()
+        discoveredBluetoothDevices[address] = mapOf(
+            "address" to address,
+            "name" to if (canReadName) device.name else null,
+            "bondState" to device.bondState.toString(),
+        )
+    }
+
+    private fun registerBluetoothReceiverIfNeeded() {
+        if (bluetoothReceiverRegistered) {
+            return
+        }
+        registerReceiver(bluetoothReceiver, IntentFilter(BluetoothDevice.ACTION_FOUND))
+        bluetoothReceiverRegistered = true
+    }
+
+    private fun unregisterBluetoothReceiver() {
+        if (!bluetoothReceiverRegistered) {
+            return
+        }
+        unregisterReceiver(bluetoothReceiver)
+        bluetoothReceiverRegistered = false
+    }
+
+    private fun scanBluetoothDevices(): List<Map<String, String?>> {
+        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return emptyList()
+        if (!canScanBluetooth(adapter)) {
+            return emptyList()
+        }
+
+        registerBluetoothReceiverIfNeeded()
+        if (adapter.isDiscovering) {
+            adapter.cancelDiscovery()
+        }
+
+        val canReadName = canReadBluetoothNames()
+        val bondedDevices = adapter.bondedDevices ?: emptySet()
+        for (device in bondedDevices) {
+            discoveredBluetoothDevices[device.address] = mapOf(
+                "address" to device.address,
+                "name" to if (canReadName) device.name else null,
+                "bondState" to device.bondState.toString(),
+            )
+        }
+
+        adapter.startDiscovery()
+        return discoveredBluetoothDevices.values.toList()
+    }
+
+    private fun getBluetoothSignalInfo(): Map<String, String> {
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        val alias = Build.MODEL ?: "Android"
+        val address = adapter?.address ?: "unknown"
+        return mapOf(
+            "alias" to alias,
+            "id" to address,
+            "transport" to "bluetooth",
+        )
+    }
+
+    private fun startBluetoothFileServer(): Boolean {
+        if (bluetoothFileServerRunning) {
+            return true
+        }
+        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return false
+        if (!adapter.isEnabled || !canReadBluetoothNames()) {
+            return false
+        }
+
+        bluetoothFileServerRunning = true
+        bluetoothServerThread = Thread {
+            try {
+                bluetoothServerSocket = adapter.listenUsingRfcommWithServiceRecord(
+                    "LocalSendProFileTransfer",
+                    BLUETOOTH_FILE_TRANSFER_UUID
+                )
+                while (bluetoothFileServerRunning) {
+                    val socket = bluetoothServerSocket?.accept() ?: break
+                    handleIncomingBluetoothFile(socket)
+                }
+            } catch (_: Exception) {
+            } finally {
+                bluetoothFileServerRunning = false
+                try {
+                    bluetoothServerSocket?.close()
+                } catch (_: Exception) {
+                }
+                bluetoothServerSocket = null
+            }
+        }.apply { start() }
+
+        return true
+    }
+
+    private fun stopBluetoothFileServer() {
+        bluetoothFileServerRunning = false
+        try {
+            bluetoothServerSocket?.close()
+        } catch (_: Exception) {
+        }
+        bluetoothServerSocket = null
+        bluetoothServerThread = null
+    }
+
+    private fun handleIncomingBluetoothFile(socket: BluetoothSocket) {
+        try {
+            val input = DataInputStream(socket.inputStream)
+            val fileName = input.readUTF()
+            val size = input.readLong().toInt()
+            val buffer = ByteArray(size)
+            input.readFully(buffer)
+
+            if (fileName == HOTSPOT_CONTROL_PACKET) {
+                val payload = String(buffer, Charsets.UTF_8)
+                val json = JSONObject(payload)
+                val ssid = json.optString("ssid")
+                val passphrase = json.optString("passphrase")
+                if (ssid.isNotBlank() && passphrase.isNotBlank()) {
+                    connectToHotspot(ssid, passphrase)
+                }
+            } else {
+                val outputDir = getExternalFilesDir(null) ?: filesDir
+                val file = File(outputDir, fileName)
+                file.writeBytes(buffer)
+            }
+
+            DataOutputStream(socket.outputStream).use { out ->
+                out.writeUTF("OK")
+                out.flush()
+            }
+        } catch (_: Exception) {
+        } finally {
+            try {
+                socket.close()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun sendBluetoothFile(address: String, fileName: String, data: ByteArray): Boolean {
+        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return false
+        if (!adapter.isEnabled || !canReadBluetoothNames()) {
+            return false
+        }
+
+        return try {
+            val device = adapter.getRemoteDevice(address)
+            if (adapter.isDiscovering) {
+                adapter.cancelDiscovery()
+            }
+            val socket = device.createRfcommSocketToServiceRecord(BLUETOOTH_FILE_TRANSFER_UUID)
+            socket.connect()
+            DataOutputStream(socket.outputStream).use { out ->
+                out.writeUTF(fileName)
+                out.writeLong(data.size.toLong())
+                out.write(data)
+                out.flush()
+            }
+            val ack = DataInputStream(socket.inputStream).readUTF()
+            socket.close()
+            ack == "OK"
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun startLocalOnlyHotspot(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            result.success(null)
+            return
+        }
+        hotspotInfo?.let {
+            result.success(it)
+            return
+        }
+
+        if (!hasPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)) {
+            result.success(null)
+            return
+        }
+
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        pendingHotspotStartResult = result
+        wifiManager.startLocalOnlyHotspot(object : WifiManager.LocalOnlyHotspotCallback() {
+            override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
+                hotspotReservation = reservation
+                val cfg = reservation.softApConfiguration
+                hotspotInfo = mapOf(
+                    "ssid" to (cfg?.ssid ?: ""),
+                    "passphrase" to (cfg?.passphrase ?: ""),
+                )
+                pendingHotspotStartResult?.success(hotspotInfo)
+                pendingHotspotStartResult = null
+            }
+
+            override fun onFailed(reason: Int) {
+                pendingHotspotStartResult?.success(null)
+                pendingHotspotStartResult = null
+            }
+        }, Handler(Looper.getMainLooper()))
+    }
+
+    private fun stopLocalOnlyHotspot() {
+        hotspotReservation?.close()
+        hotspotReservation = null
+        hotspotInfo = null
+    }
+
+    private fun connectToHotspot(ssid: String, passphrase: String): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return false
+        }
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        disconnectFromHotspot()
+
+        return try {
+            val specifier = WifiNetworkSpecifier.Builder()
+                .setSsid(ssid)
+                .setWpa2Passphrase(passphrase)
+                .build()
+            val request = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .setNetworkSpecifier(specifier)
+                .build()
+            activeNetworkCallback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    connectivityManager.bindProcessToNetwork(network)
+                }
+            }
+            connectivityManager.requestNetwork(request, activeNetworkCallback!!)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun disconnectFromHotspot() {
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        try {
+            activeNetworkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
+        } catch (_: Exception) {
+        }
+        activeNetworkCallback = null
+        connectivityManager.bindProcessToNetwork(null)
     }
 
     private fun openDirectoryPicker(onlyPath: Boolean) {
@@ -194,6 +607,21 @@ class MainActivity : FlutterActivity() {
                 pendingResult = null
             }
         }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_CODE_BLUETOOTH_PERMISSIONS) {
+            return
+        }
+
+        val granted = grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+        pendingBluetoothPermissionResult?.success(granted)
+        pendingBluetoothPermissionResult = null
     }
 
     private fun listFiles(uri: Uri, files: MutableList<FileInfo>) {

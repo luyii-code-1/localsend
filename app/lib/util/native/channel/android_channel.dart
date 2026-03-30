@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dart_mappable/dart_mappable.dart';
 import 'package:flutter/services.dart';
 import 'package:localsend_app/util/native/content_uri_helper.dart';
@@ -5,7 +7,7 @@ import 'package:logging/logging.dart';
 
 part 'android_channel.mapper.dart';
 
-const _methodChannel = MethodChannel('org.localsend.localsend_app/localsend');
+const _methodChannel = MethodChannel('cn.luyii.localsend_pro/localsend');
 final _logger = Logger('AndroidSaf');
 
 /// From Android 10 and above, we need to use the Storage Access Framework (SAF) to access files due to the scoped storage.
@@ -92,6 +94,73 @@ Future<void> openGallery() async {
   await _methodChannel.invokeMethod('openGallery');
 }
 
+Future<List<BluetoothDeviceInfo>> scanBluetoothDevicesAndroid() async {
+  final result = await _methodChannel.invokeMethod<List>('scanBluetoothDevices');
+  if (result == null) {
+    return [];
+  }
+
+  return result
+      .map((e) => BluetoothDeviceInfo.fromJson((e as Map).cast<String, dynamic>()))
+      .toList();
+}
+
+Future<Map<String, String>> getBluetoothSignalInfoAndroid() async {
+  final result = await _methodChannel.invokeMethod<Map>('getBluetoothSignalInfo');
+  if (result == null) {
+    return {};
+  }
+  return result.cast<String, String>();
+}
+
+Future<bool> startBluetoothFileServerAndroid() async {
+  return await _methodChannel.invokeMethod<bool>('startBluetoothFileServer') ?? false;
+}
+
+Future<bool> requestBluetoothPermissionsAndroid() async {
+  return await _methodChannel.invokeMethod<bool>('requestBluetoothPermissions') ?? false;
+}
+
+Future<bool> sendBluetoothFileAndroid({
+  required String address,
+  required String fileName,
+  required Uint8List data,
+}) async {
+  return await _methodChannel.invokeMethod<bool>('sendBluetoothFile', {
+        'address': address,
+        'fileName': fileName,
+        'data': data,
+      }) ??
+      false;
+}
+
+Future<Map<String, String>?> startLocalOnlyHotspotAndroid() async {
+  final result = await _methodChannel.invokeMethod<Map>('startLocalOnlyHotspot');
+  if (result == null) {
+    return null;
+  }
+  return result.cast<String, String>();
+}
+
+Future<bool> stopLocalOnlyHotspotAndroid() async {
+  return await _methodChannel.invokeMethod<bool>('stopLocalOnlyHotspot') ?? false;
+}
+
+Future<bool> connectToHotspotAndroid({
+  required String ssid,
+  required String passphrase,
+}) async {
+  return await _methodChannel.invokeMethod<bool>('connectToHotspot', {
+        'ssid': ssid,
+        'passphrase': passphrase,
+      }) ??
+      false;
+}
+
+Future<bool> disconnectFromHotspotAndroid() async {
+  return await _methodChannel.invokeMethod<bool>('disconnectFromHotspot') ?? false;
+}
+
 @MappableClass()
 class PickDirectoryResult with PickDirectoryResultMappable {
   final String directoryUri;
@@ -116,4 +185,24 @@ class FileInfo with FileInfoMappable {
     required this.uri,
     required this.lastModified,
   });
+}
+
+class BluetoothDeviceInfo {
+  final String address;
+  final String? name;
+  final String? bondState;
+
+  const BluetoothDeviceInfo({
+    required this.address,
+    required this.name,
+    required this.bondState,
+  });
+
+  factory BluetoothDeviceInfo.fromJson(Map<String, dynamic> json) {
+    return BluetoothDeviceInfo(
+      address: json['address'] as String? ?? '',
+      name: json['name'] as String?,
+      bondState: json['bondState'] as String?,
+    );
+  }
 }
