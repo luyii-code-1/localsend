@@ -104,12 +104,22 @@ class ServerService extends Notifier<ServerState?> {
       port = defaultPort;
     }
 
+    _logger.info('Starting server...');
+
+    final (httpServer, boundPort) = await _bindHttpServer(
+      preferredPort: port,
+      https: https,
+    );
+    if (boundPort != port) {
+      _logger.warning('Preferred port $port is unavailable. Falling back to $boundPort.');
+    }
+
     final router = SimpleServerRouteBuilder();
     final fingerprint = ref.read(securityProvider).certificateHash;
     _receiveController.installRoutes(
       router: router,
       alias: alias,
-      port: port,
+      port: boundPort,
       https: https,
       fingerprint: fingerprint,
       showToken: ref.read(settingsProvider).showToken,
@@ -120,33 +130,14 @@ class ServerService extends Notifier<ServerState?> {
       fingerprint: fingerprint,
     );
 
-    _logger.info('Starting server...');
-
-    final HttpServer httpServer;
-    if (https) {
-      final securityContext = ref.read(securityProvider);
-      httpServer = await HttpServer.bindSecure(
-        '0.0.0.0',
-        port,
-        SecurityContext()
-          ..usePrivateKeyBytes(securityContext.privateKey.codeUnits)
-          ..useCertificateChainBytes(securityContext.certificate.codeUnits),
-      );
-      _logger.info('Server started. (Port: $port, HTTPS only)');
-    } else {
-      httpServer = await HttpServer.bind(
-        '0.0.0.0',
-        port,
-      );
-      _logger.info('Server started. (Port: $port, HTTP only)');
-    }
+    _logger.info('Server started. (Port: $boundPort, ${https ? 'HTTPS' : 'HTTP'} only)');
 
     final server = SimpleServer.start(server: httpServer, routes: router);
 
     final newServerState = ServerState(
       httpServer: server,
       alias: alias,
-      port: port,
+      port: boundPort,
       https: https,
       session: null,
       webSendState: null,
@@ -155,6 +146,47 @@ class ServerService extends Notifier<ServerState?> {
 
     state = newServerState;
     return newServerState;
+  }
+
+  Future<(HttpServer, int)> _bindHttpServer({
+    required int preferredPort,
+    required bool https,
+  }) async {
+    final candidates = <int>{
+      preferredPort,
+      for (int i = 1; i <= 5; i++) preferredPort + i,
+      0, // let OS choose a free port as last resort
+    }.where((p) => p >= 0 && p <= 65535);
+
+    SocketException? lastError;
+    for (final candidate in candidates) {
+      try {
+        if (https) {
+          final securityContext = ref.read(securityProvider);
+          final server = await HttpServer.bindSecure(
+            '0.0.0.0',
+            candidate,
+            SecurityContext()
+              ..usePrivateKeyBytes(securityContext.privateKey.codeUnits)
+              ..useCertificateChainBytes(securityContext.certificate.codeUnits),
+          );
+          return (server, server.port);
+        } else {
+          final server = await HttpServer.bind('0.0.0.0', candidate);
+          return (server, server.port);
+        }
+      } on SocketException catch (e) {
+        lastError = e;
+        final inUse = e.osError?.errorCode == 98 || e.osError?.errorCode == 48 || e.message.contains('Address already in use');
+        if (inUse) {
+          _logger.warning('Port $candidate is already in use, trying next port...');
+          continue;
+        }
+        rethrow;
+      }
+    }
+
+    throw SocketException('Unable to bind server to any candidate port', osError: lastError?.osError);
   }
 
   Future<void> stopServer() async {
